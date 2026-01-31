@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  # Banco de Dados para o Spring Boot
+  postgres:
+    image: postgres:15-alpine
+    container_name: iot_db
+    restart: always
+    environment:
+      POSTGRES_USER: admin           # <--- USUÁRIO
+      POSTGRES_PASSWORD: admin       # <--- SENHA (Anota essa!)
+      POSTGRES_DB: irrigacao_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # Interface visual para ver o banco (Opcional, mas útil)
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: iot_pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+
+  # Se você usava MQTT (Mosquitto), descomente abaixo:
+  # mosquitto:
+  #   image: eclipse-mosquitto
+  #   ports:
+  #     - "1883:1883"
+  #     - "9001:9001"
+  #   volumes:
+  #     - ./mosquitto:/mosquitto/config
+
+volumes:
+  pgdata:
