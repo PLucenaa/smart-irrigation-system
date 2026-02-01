@@ -6,7 +6,7 @@ import psycopg2
 
 # --- CONFIGURAÇÕES ---
 # Verifique se é /dev/ttyACM0 ou /dev/ttyUSB0 (ls /dev/tty*)
-PORTA_SERIAL = '/dev/ttyACM0' 
+PORTA_SERIAL = '/dev/ttyUSB0' 
 BAUD_RATE = 115200
 
 # Configuração do Banco de Dados (Credenciais do seu Docker no VPS)
