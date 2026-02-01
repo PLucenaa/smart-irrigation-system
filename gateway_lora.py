@@ -1,68 +1,97 @@
 import serial
 import json
 import time
-import requests # Caso vá enviar para o Spring Boot depois
+import datetime
+import psycopg2 
 
 # --- CONFIGURAÇÕES ---
-# O Heltec geralmente aparece como /dev/ttyUSB0 ou /dev/ttyACM0
-# Use 'ls /dev/tty*' para descobrir
-SERIAL_PORT = '/dev/ttyUSB0' 
+# Verifique se é /dev/ttyACM0 ou /dev/ttyUSB0 (ls /dev/tty*)
+PORTA_SERIAL = '/dev/ttyACM0' 
 BAUD_RATE = 115200
 
-# URL da sua API Spring Boot (Exemplo)
-API_URL = "http://localhost:8080/api/sensores"
+# Configuração do Banco de Dados (Credenciais do seu Docker no VPS)
+DB_CONFIG = {
+    "host": "XXXXXXXXXX",       # Seu IP da Hostinger
+    "database": "banco_tcc",
+    "user": "irrigation_app",
+    "password": "XXXXXXX",
+    "port": "5432"
+}
 
-def conectar_serial():
+def salvar_banco(sensor_id, umid, temp, status):
+    """Conecta no VPS e salva o registro"""
+    conn = None
     try:
-        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-        print(f"--- Conectado ao Heltec em {SERIAL_PORT} ---")
-        return ser
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        query = "INSERT INTO leituras (sensor_id, umidade, temperatura, status) VALUES (%s, %s, %s, %s)"
+        cur.execute(query, (sensor_id, umid, temp, status))
+        conn.commit()
+        cur.close()
+        print(f"   >>> [NUVEM] Sucesso! Dado salvo no DB.")
     except Exception as e:
-        print(f"Erro ao conectar na porta {SERIAL_PORT}: {e}")
-        return None
+        print(f"   >>> [ERRO BANCO] Falha ao conectar ou salvar no VPS: {e}")
+    finally:
+        if conn:
+            conn.close()
 
-def processar_dados(linha):
-    try:
-        # Limpa a string e tenta converter JSON
-        linha = linha.decode('utf-8').strip()
-        if not linha: return
-        
-        print(f"[RAW]: {linha}")
-        
-        # Se for JSON válido, processa
-        if linha.startswith('{') and linha.endswith('}'):
-            dados = json.loads(linha)
-            
-            # AQUI VOCÊ FAZ A MÁGICA (Envia pro Banco ou API)
-            print(f"✅ DADOS VÁLIDOS! ID: {dados.get('id')} | Umidade: {dados.get('umid')}%")
-            
-            # Exemplo de envio para o Spring Boot (descomente quando tiver a API)
-            # requests.post(API_URL, json=dados)
-            
-    except json.JSONDecodeError:
-        print(f"⚠️ Erro de JSON (Ignorado): {linha}")
-    except Exception as e:
-        print(f"❌ Erro: {e}")
+def logica_fusao_dados(umidade, temperatura):
+    """Regra de Negócio na Borda (Edge Computing)"""
+    if umidade < 40 and temperatura > 30:
+        return "CRITICO", "Irrigação Imediata (Risco Térmico)"
+    elif umidade < 40:
+        return "ATENCAO", "Planejar Irrigação"
+    else:
+        return "NORMAL", "Monitorando"
 
-def main():
-    ser = conectar_serial()
-    while not ser:
-        time.sleep(5)
-        ser = conectar_serial()
+print(f"--- INICIANDO GATEWAY TCC (vFinal Corrigida) ---")
+print(f"Conectando ao banco em: {DB_CONFIG['host']}...")
 
+try:
+    # Abre a porta serial
+    ser = serial.Serial(PORTA_SERIAL, BAUD_RATE, timeout=1)
+    ser.flush()
+    print(f"Lendo dados da porta {PORTA_SERIAL}...")
+    
     while True:
-        try:
-            if ser.in_waiting > 0:
-                linha = ser.readline()
-                processar_dados(linha)
-        except OSError:
-            print("⚠️ Cabo desconectado? Tentando reconectar...")
-            ser.close()
-            time.sleep(2)
-            ser = conectar_serial()
-        except KeyboardInterrupt:
-            print("\nEncerrando Gateway.")
-            break
+        if ser.in_waiting > 0:
+            # Lê a linha e limpa espaços/caracteres estranhos
+            linha = ser.readline().decode('utf-8', errors='ignore').strip()
+            
+            if linha.startswith('{') and linha.endswith('}'):
+                try:
+                    dados = json.loads(linha)
+                    
+                    # --- TRATAMENTO DE CAMPOS (Aqui estava o erro!) ---
+                    sensor_id = dados.get('id', 'Desconhecido')
+                    
+                    # Pega a umidade, se não existir coloca 0.0
+                    umidade = float(dados.get('umid', 0.0))
+                    
+                    # Pega a temperatura, se não existir coloca 0.0 (EVITA O ERRO)
+                    temperatura = float(dados.get('temp', 0.0))
+                    
+                    # 1. Processamento na Borda
+                    nivel, recomendacao = logica_fusao_dados(umidade, temperatura)
+                    
+                    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+                    print(f"\n[{timestamp}] Sensor: {sensor_id} | Umid: {umidade}% | Temp: {temperatura}C")
+                    print(f"   >>> DECISÃO: {nivel} ({recomendacao})")
+                    
+                    # 2. Persistência na Nuvem
+                    salvar_banco(sensor_id, umidade, temperatura, nivel)
+                    
+                except json.JSONDecodeError:
+                    print(f"   >>> [AVISO] JSON inválido recebido: {linha}")
+                except Exception as e:
+                    print(f"   >>> [ERRO PROCESSAMENTO]: {e}")
+                    
+        time.sleep(0.1)
 
-if __name__ == "__main__":
-    main()
+except serial.SerialException as e:
+    print(f"ERRO: Porta {PORTA_SERIAL} não encontrada ou ocupada: {e}")
+except KeyboardInterrupt:
+    print("\nEncerrando Gateway...")
+finally:
+    if 'ser' in locals() and ser.is_open:
+        ser.close()
