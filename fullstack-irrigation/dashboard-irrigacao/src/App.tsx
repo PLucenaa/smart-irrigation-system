@@ -3,52 +3,85 @@ import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card"
 import { Badge } from "./components/ui/badge"
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Droplets, Thermometer, RefreshCw, Sprout } from 'lucide-react'
+import { Leitura } from './types/leitura'
 
-// Tipo de dados igual ao do Java
-interface Leitura {
-  id: number;
-  sensorId: string;
-  umidade: number;
-  temperatura: number;
-  status: string;
-  dataHora: string;
+// Constantes de configuração
+const API_ENDPOINT = '/api/leituras'
+const POLLING_INTERVAL_MS = 10000 // 10 segundos
+
+// Valores padrão para quando não há dados disponíveis
+const DADOS_PADRAO: Partial<Leitura> = {
+  umidade: 0,
+  temperatura: 0,
+  status: 'OFFLINE'
 }
 
 export default function Dashboard() {
   const [dados, setDados] = useState<Leitura[]>([]);
   const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
 
-  // Função que busca os dados da API Java
-  const fetchData = async () => {
-    try {const response = await fetch('/api/leituras');
-      if (response.ok) {
-        const json = await response.json();
-        setDados(json);
+  /**
+   * Busca os dados da API e atualiza o estado do componente.
+   * Em caso de erro, atualiza o estado de erro para exibição ao usuário.
+   */
+  const buscarDados = async (): Promise<void> => {
+    try {
+      setErro(null);
+      const response = await fetch(API_ENDPOINT);
+
+      if (!response.ok) {
+        throw new Error(`Erro HTTP: ${response.status} - ${response.statusText}`);
       }
+
+      const dadosJson: Leitura[] = await response.json();
+      setDados(dadosJson);
     } catch (error) {
-      console.error("Erro ao buscar dados:", error);
+      const mensagemErro = error instanceof Error
+        ? error.message
+        : 'Erro desconhecido ao buscar dados';
+
+      console.error('Erro ao buscar dados:', error);
+      setErro(mensagemErro);
     } finally {
       setLoading(false);
     }
   };
 
-  // Atualiza assim que abre e depois a cada 10 segundos
+  // Configura o polling automático ao montar o componente
   useEffect(() => {
-    fetchData(); 
-    const interval = setInterval(fetchData, 10000); 
-    return () => clearInterval(interval);
+    buscarDados(); // Primeira busca imediata
+
+    const intervalId = setInterval(buscarDados, POLLING_INTERVAL_MS);
+
+    // Cleanup: remove o intervalo ao desmontar o componente
+    return () => clearInterval(intervalId);
   }, []);
 
-  // Se não tiver dados ainda, mostra zerado para não quebrar a tela
-  const ultima = dados.length > 0 ? dados[0] : { umidade: 0, temperatura: 0, status: 'OFFLINE' };
+  // Obtém a última leitura ou usa valores padrão
+  const ultimaLeitura: Leitura = dados.length > 0
+    ? dados[0]
+    : { ...DADOS_PADRAO } as Leitura;
 
-  // Inverte os dados para o gráfico (para o mais antigo ficar na esquerda)
-  const dadosGrafico = [...dados].reverse();
+  // Inverte os dados para exibição no gráfico (mais antigo à esquerda)
+  const dadosParaGrafico = [...dados].reverse();
+
+  // Determina a cor do badge de status baseado no valor
+  const obterCorStatus = (status: string): string => {
+    switch (status) {
+      case 'CRITICO':
+        return 'bg-red-500';
+      case 'ATENCAO':
+        return 'bg-yellow-500';
+      default:
+        return 'bg-green-500';
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 p-8 font-sans text-slate-900">
       <div className="max-w-7xl mx-auto space-y-8">
-        
+
         {/* Cabeçalho */}
         <div className="flex justify-between items-center">
           <div>
@@ -58,9 +91,17 @@ export default function Dashboard() {
             <p className="text-slate-500">Monitoramento em Tempo Real - LoRa & Spring Boot</p>
           </div>
           <div className="flex gap-2">
-             <Badge variant="outline" className={loading ? "bg-yellow-100 text-yellow-700" : "bg-green-100 text-green-700"}>
-                {loading ? "Carregando..." : "Conectado API"}
-             </Badge>
+            <Badge
+              variant="outline"
+              className={loading ? "bg-yellow-100 text-yellow-700" : "bg-green-100 text-green-700"}
+            >
+              {loading ? "Carregando..." : "Conectado API"}
+            </Badge>
+            {erro && (
+              <Badge variant="outline" className="bg-red-100 text-red-700">
+                Erro: {erro}
+              </Badge>
+            )}
           </div>
         </div>
 
@@ -72,7 +113,9 @@ export default function Dashboard() {
               <Droplets className="h-4 w-4 text-blue-500" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{ultima.umidade ? ultima.umidade.toFixed(1) : 0}%</div>
+              <div className="text-2xl font-bold">
+                {ultimaLeitura.umidade?.toFixed(1) ?? '0.0'}%
+              </div>
             </CardContent>
           </Card>
 
@@ -82,7 +125,9 @@ export default function Dashboard() {
               <Thermometer className="h-4 w-4 text-orange-500" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{ultima.temperatura ? ultima.temperatura.toFixed(1) : 0}°C</div>
+              <div className="text-2xl font-bold">
+                {ultimaLeitura.temperatura?.toFixed(1) ?? '0.0'}°C
+              </div>
             </CardContent>
           </Card>
 
@@ -92,11 +137,10 @@ export default function Dashboard() {
               <RefreshCw className="h-4 w-4 text-emerald-500" />
             </CardHeader>
             <CardContent>
-              <Badge className={`text-white hover:bg-opacity-80 ${
-                ultima.status === 'CRITICO' ? 'bg-red-500' : 
-                ultima.status === 'ATENCAO' ? 'bg-yellow-500' : 'bg-green-500'
-              }`}>
-                {ultima.status || 'AGUARDANDO'}
+              <Badge
+                className={`text-white hover:bg-opacity-80 ${obterCorStatus(ultimaLeitura.status || 'NORMAL')}`}
+              >
+                {ultimaLeitura.status || 'AGUARDANDO'}
               </Badge>
             </CardContent>
           </Card>
@@ -109,10 +153,18 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={dadosGrafico}>
+              <LineChart data={dadosParaGrafico}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                <XAxis dataKey="dataHora" tick={{fill: '#64748b', fontSize: 12}} tickFormatter={(t) => new Date(t).toLocaleTimeString()} />
-                <YAxis unit="%" domain={[0, 100]} tick={{fill: '#64748b'}} />
+                <XAxis
+                  dataKey="dataHora"
+                  tick={{fill: '#64748b', fontSize: 12}}
+                  tickFormatter={(t) => new Date(t).toLocaleTimeString()}
+                />
+                <YAxis
+                  unit="%"
+                  domain={[0, 100]}
+                  tick={{fill: '#64748b'}}
+                />
                 <Tooltip 
                   labelFormatter={(t) => new Date(t).toLocaleString()}
                   contentStyle={{ backgroundColor: '#fff', borderRadius: '8px' }}
