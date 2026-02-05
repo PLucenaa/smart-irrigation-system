@@ -1,0 +1,191 @@
+name: 🚀 Deploy to VPS (Debian + Docker)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-backend:
+    name: 🔨 Build Backend (Spring Boot)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup Java ${{ secrets.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ secrets.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: 🔧 Build com Maven
+        working-directory: ./fullstack-irrigation/api-irrigacao
+        run: |
+          mvn clean package -DskipTests=false
+          echo "✅ Build do backend concluído"
+
+      - name: 📦 Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-jar
+          path: fullstack-irrigation/api-irrigacao/target/*.jar
+          retention-days: 1
+
+  build-frontend:
+    name: 🎨 Build Frontend (React)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js ${{ secrets.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ secrets.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: fullstack-irrigation/dashboard-irrigacao/package-lock.json
+
+      - name: 📥 Instalar dependências
+        working-directory: ./fullstack-irrigation/dashboard-irrigacao
+        run: npm ci
+
+      - name: 🔧 Build produção
+        working-directory: ./fullstack-irrigation/dashboard-irrigacao
+        run: |
+          npm run build
+          echo "✅ Build do frontend concluído"
+
+      - name: 📦 Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-build
+          path: fullstack-irrigation/dashboard-irrigacao/dist
+          retention-days: 1
+
+  deploy:
+    name: 🚀 Deploy no VPS (Debian)
+    needs: [build-backend, build-frontend]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+
+      - name: 📦 Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: 🔐 Configurar SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+
+      - name: 🚀 Deploy no VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_BACKEND_DIR: ${{ secrets.VPS_BACKEND_DIR }}
+          VPS_FRONTEND_DIR: ${{ secrets.VPS_FRONTEND_DIR }}
+        run: |
+          # Verifica conexão SSH
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST "echo '✅ Conexão SSH estabelecida'"
+
+          # Cria diretório temporário para frontend
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST "mkdir -p /tmp/dashboard-build"
+
+          # Copia o JAR do backend para /root/ (estrutura real do VPS)
+          echo "📦 Copiando JAR para /root/..."
+          JAR_NAME=$(basename ./artifacts/api-jar/*.jar)
+          scp -o StrictHostKeyChecking=no \
+            ./artifacts/api-jar/*.jar \
+            $VPS_USER@$VPS_HOST:/root/$JAR_NAME
+
+          # Faz backup do JAR anterior se existir
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST << ENDSSH
+            if [ -f "/root/$JAR_NAME" ]; then
+              # Se já existe um JAR com esse nome, faz backup
+              if [ -f "/root/api-irrigacao-0.0.1-SNAPSHOT.jar" ] && [ "$JAR_NAME" != "api-irrigacao-0.0.1-SNAPSHOT.jar" ]; then
+                mv /root/api-irrigacao-0.0.1-SNAPSHOT.jar /root/api-irrigacao-0.0.1-SNAPSHOT.jar.backup.\$(date +%Y%m%d_%H%M%S)
+              fi
+              # Se o novo JAR tem nome diferente, renomeia para o padrão esperado
+              if [ "$JAR_NAME" != "api-irrigacao-0.0.1-SNAPSHOT.jar" ]; then
+                mv /root/$JAR_NAME /root/api-irrigacao-0.0.1-SNAPSHOT.jar
+              fi
+            fi
+          ENDSSH
+
+          # Copia o build do frontend temporariamente
+          echo "📦 Copiando frontend..."
+          scp -r -o StrictHostKeyChecking=no \
+            ./artifacts/dashboard-build/* \
+            $VPS_USER@$VPS_HOST:/tmp/dashboard-build/
+
+          # Move frontend para diretório do Nginx e ajusta permissões
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST << ENDSSH
+            sudo rm -rf $VPS_FRONTEND_DIR/*
+            sudo mv /tmp/dashboard-build/* $VPS_FRONTEND_DIR/
+            sudo chown -R www-data:www-data $VPS_FRONTEND_DIR
+            sudo chmod -R 755 $VPS_FRONTEND_DIR
+            echo "✅ Frontend atualizado em $VPS_FRONTEND_DIR"
+          ENDSSH
+
+          # Verifica e reinicia serviços
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST << 'ENDSSH'
+            # Verifica se o container Docker PostgreSQL está rodando
+            if docker ps --format '{{.Names}}' | grep -q "smart-irrigation"; then
+              echo "✅ Container PostgreSQL (smart-irrigation) está rodando"
+            else
+              echo "⚠️ Container PostgreSQL não está rodando. Verifique manualmente."
+            fi
+
+            # Reinicia serviço Spring Boot (se existir como systemd)
+            if systemctl list-unit-files 2>/dev/null | grep -q "api-irrigacao.service"; then
+              if systemctl is-active --quiet api-irrigacao; then
+                echo "🔄 Reiniciando serviço api-irrigacao..."
+                sudo systemctl restart api-irrigacao
+                sleep 3
+                if systemctl is-active --quiet api-irrigacao; then
+                  echo "✅ Serviço api-irrigacao reiniciado com sucesso"
+                else
+                  echo "❌ Erro ao reiniciar serviço api-irrigacao"
+                  sudo systemctl status api-irrigacao --no-pager -l | head -n 20 || true
+                fi
+              else
+                echo "▶️ Iniciando serviço api-irrigacao..."
+                sudo systemctl start api-irrigacao
+                sleep 2
+              fi
+            else
+              echo "ℹ️ Serviço systemd não configurado. Reinicie manualmente:"
+              echo "   java -jar /root/api-irrigacao-0.0.1-SNAPSHOT.jar"
+            fi
+
+            # Recarrega Nginx
+            if command -v nginx >/dev/null 2>&1; then
+              if sudo nginx -t 2>/dev/null; then
+                sudo systemctl reload nginx
+                echo "✅ Nginx recarregado"
+              else
+                echo "❌ Erro na configuração do Nginx"
+                sudo nginx -t
+                exit 1
+              fi
+            else
+              echo "⚠️ Nginx não encontrado"
+            fi
+          ENDSSH
+
+      - name: ✅ Verificar deploy
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "✅ Deploy concluído!"
+          echo "🌐 Frontend: https://$VPS_HOST"
+          echo "🔌 API: https://$VPS_HOST/api/leituras"

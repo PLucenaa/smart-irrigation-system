@@ -1,0 +1,35 @@
+[Unit]
+Description=Smart Irrigation API - Spring Boot Application
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/api-irrigacao
+
+# Carrega variáveis de ambiente de arquivo externo (mais seguro)
+EnvironmentFile=/root/.env-api-irrigacao
+
+# Variáveis não sensíveis podem ser definidas aqui
+Environment="JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64"
+Environment="SERVER_PORT=8080"
+Environment="SHOW_SQL=false"
+
+ExecStart=/usr/bin/java -jar -Xmx512m -Xms256m /root/api-irrigacao/api-irrigacao.jar
+
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=api-irrigacao
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

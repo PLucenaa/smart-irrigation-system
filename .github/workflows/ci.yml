@@ -1,0 +1,164 @@
+name: 🚀 Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch: # Permite execução manual
+
+jobs:
+  # ============================================================================
+  # JOB 1: Build e Testes do Backend (Spring Boot)
+  # ============================================================================
+  build-backend:
+    name: 🔨 Build Backend (Spring Boot)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup Java ${{ secrets.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ secrets.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: 🔧 Build com Maven
+        working-directory: ./fullstack-irrigation/api-irrigacao
+        run: |
+          mvn clean package -DskipTests=false
+          echo "✅ Build do backend concluído"
+
+      - name: 📦 Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-jar
+          path: fullstack-irrigation/api-irrigacao/target/*.jar
+          retention-days: 1
+
+  # ============================================================================
+  # JOB 2: Build do Frontend (React)
+  # ============================================================================
+  build-frontend:
+    name: 🎨 Build Frontend (React)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js ${{ secrets.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ secrets.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: fullstack-irrigation/dashboard-irrigacao/package-lock.json
+
+      - name: 📥 Instalar dependências
+        working-directory: ./fullstack-irrigation/dashboard-irrigacao
+        run: npm ci
+
+      - name: 🔧 Build produção
+        working-directory: ./fullstack-irrigation/dashboard-irrigacao
+        run: |
+          npm run build
+          echo "✅ Build do frontend concluído"
+
+      - name: 📦 Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-build
+          path: fullstack-irrigation/dashboard-irrigacao/dist
+          retention-days: 1
+
+  # ============================================================================
+  # JOB 3: Deploy no VPS
+  # ============================================================================
+  deploy:
+    name: 🚀 Deploy no VPS
+    needs: [build-backend, build-frontend]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+
+      - name: 📦 Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: 🔐 Configurar SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+
+      - name: 🚀 Deploy no VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_BACKEND_DIR: ${{ secrets.VPS_BACKEND_DIR }}
+          VPS_FRONTEND_DIR: ${{ secrets.VPS_FRONTEND_DIR }}
+        run: |
+          # Cria diretórios no VPS se não existirem
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST << ENDSSH
+            mkdir -p $VPS_BACKEND_DIR
+            mkdir -p $VPS_FRONTEND_DIR
+          ENDSSH
+
+          # Copia o JAR do backend para /root/api-irrigacao
+          echo "📦 Copiando JAR para $VPS_BACKEND_DIR..."
+          scp -o StrictHostKeyChecking=no \
+            ./artifacts/api-jar/*.jar \
+            $VPS_USER@$VPS_HOST:$VPS_BACKEND_DIR/api-irrigacao.jar
+
+          # Copia o build do frontend para /var/www/dashboard
+          echo "📦 Copiando frontend para $VPS_FRONTEND_DIR..."
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST \
+            "sudo rm -rf $VPS_FRONTEND_DIR/*"
+          
+          # Copia arquivos temporariamente para um local com permissão
+          scp -r -o StrictHostKeyChecking=no \
+            ./artifacts/dashboard-build/* \
+            $VPS_USER@$VPS_HOST:/tmp/dashboard-build/
+
+          # Move com sudo para o diretório final
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST << ENDSSH
+            sudo mv /tmp/dashboard-build/* $VPS_FRONTEND_DIR/
+            sudo chown -R www-data:www-data $VPS_FRONTEND_DIR
+            sudo chmod -R 755 $VPS_FRONTEND_DIR
+          ENDSSH
+
+          # Reinicia o serviço Spring Boot (se existir)
+          echo "🔄 Reiniciando serviço Spring Boot..."
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST << ENDSSH || echo "⚠️ Serviço systemd não encontrado, pulando reinicialização"
+            if systemctl is-active --quiet api-irrigacao 2>/dev/null; then
+              sudo systemctl restart api-irrigacao
+              echo "✅ Serviço api-irrigacao reiniciado"
+            else
+              echo "ℹ️ Serviço api-irrigacao não está configurado como systemd"
+            fi
+          ENDSSH
+
+          # Recarrega Nginx
+          echo "🌐 Recarregando Nginx..."
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST << ENDSSH
+            if sudo nginx -t; then
+              sudo systemctl reload nginx
+              echo "✅ Nginx recarregado"
+            else
+              echo "❌ Erro na configuração do Nginx"
+              exit 1
+            fi
+          ENDSSH
+
+      - name: ✅ Verificar deploy
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "✅ Deploy concluído com sucesso!"
+          echo "🌐 Frontend: https://$VPS_HOST"
+          echo "🔌 API: https://$VPS_HOST/api/leituras"
