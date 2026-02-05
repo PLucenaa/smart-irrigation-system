@@ -94,21 +94,31 @@ jobs:
           VPS_BACKEND_DIR: ${{ secrets.VPS_BACKEND_DIR }}
           VPS_FRONTEND_DIR: ${{ secrets.VPS_FRONTEND_DIR }}
         run: |
-          # Verifica conexão SSH
-          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST "echo '✅ Conexão SSH estabelecida'"
+          # Configurações SSH otimizadas (usar em TODAS as conexões)
+          SSH_OPTS="-o StrictHostKeyChecking=no \
+                    -o ConnectTimeout=60 \
+                    -o ServerAliveInterval=30 \
+                    -o ServerAliveCountMax=3 \
+                    -o TCPKeepAlive=yes"
 
-          # Cria diretório temporário para frontend
-          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST "mkdir -p /tmp/dashboard-build"
+          # Testar conexão primeiro
+          echo "🔍 Testando conexão SSH..."
+          ssh $SSH_OPTS $VPS_USER@$VPS_HOST "echo '✅ Conexão OK' && hostname" || {
+            echo "❌ Falha na conexão SSH"
+            exit 1
+          }
 
-          # Copia o JAR do backend para /root/ (estrutura real do VPS)
-          echo "📦 Copiando JAR para /root/..."
+          # Criar diretórios
+          echo "📁 Criando diretórios..."
+          ssh $SSH_OPTS $VPS_USER@$VPS_HOST "mkdir -p $VPS_BACKEND_DIR /tmp/dashboard-build"
+
+          # Copiar JAR
+          echo "📦 Copiando JAR..."
           JAR_NAME=$(basename ./artifacts/api-jar/*.jar)
-          scp -o StrictHostKeyChecking=no \
-            ./artifacts/api-jar/*.jar \
-            $VPS_USER@$VPS_HOST:/root/$JAR_NAME
-
+          scp $SSH_OPTS ./artifacts/api-jar/*.jar $VPS_USER@$VPS_HOST:$VPS_BACKEND_DIR/$JAR_NAME
+          
           # Faz backup do JAR anterior se existir
-          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST << ENDSSH
+          ssh $SSH_OPTS $VPS_USER@$VPS_HOST << ENDSSH
             if [ -f "/root/$JAR_NAME" ]; then
               # Se já existe um JAR com esse nome, faz backup
               if [ -f "/root/api-irrigacao-0.0.1-SNAPSHOT.jar" ] && [ "$JAR_NAME" != "api-irrigacao-0.0.1-SNAPSHOT.jar" ]; then
@@ -123,12 +133,12 @@ jobs:
 
           # Copia o build do frontend temporariamente
           echo "📦 Copiando frontend..."
-          scp -r -o StrictHostKeyChecking=no \
+          scp -r $SSH_OPTS \
             ./artifacts/dashboard-build/* \
             $VPS_USER@$VPS_HOST:/tmp/dashboard-build/
 
           # Move frontend para diretório do Nginx e ajusta permissões
-          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST << ENDSSH
+          ssh $SSH_OPTS $VPS_USER@$VPS_HOST << ENDSSH
             sudo rm -rf $VPS_FRONTEND_DIR/*
             sudo mv /tmp/dashboard-build/* $VPS_FRONTEND_DIR/
             sudo chown -R www-data:www-data $VPS_FRONTEND_DIR
@@ -137,7 +147,7 @@ jobs:
           ENDSSH
 
           # Verifica e reinicia serviços
-          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST << 'ENDSSH'
+          ssh $SSH_OPTS $VPS_USER@$VPS_HOST << 'ENDSSH'
             # Verifica se o container Docker PostgreSQL está rodando
             if docker ps --format '{{.Names}}' | grep -q "smart-irrigation"; then
               echo "✅ Container PostgreSQL (smart-irrigation) está rodando"
