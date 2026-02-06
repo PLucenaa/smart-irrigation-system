@@ -8,9 +8,9 @@ import { Leitura } from './types/leitura'
 
 // Constantes de configuração
 const API_ENDPOINT = '/api/leituras'
-const POLLING_INTERVAL_MS = 10000 // 10 segundos
-const APP_VERSION = import.meta.env.VITE_APP_VERSION || '1.0.0';
-const BUILD_TIME = new Date().toLocaleString('pt-BR');
+const POLLING_INTERVAL_MS = 10000
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || '1.0.0'
+const BUILD_TIME = new Date().toLocaleString('pt-BR')
 
 // Valores padrão para quando não há dados disponíveis
 const DADOS_PADRAO: Partial<Leitura> = {
@@ -84,25 +84,18 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-slate-50 p-8 font-sans text-slate-900">
       <div className="max-w-7xl mx-auto space-y-8">
-
         {/* Cabeçalho */}
         <div className="flex justify-between items-center">
-          <div>
-              <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-                <Sprout className="text-green-600" /> Smart Irrigation
-              </h1>
-              <p className="text-slate-500">
-                Monitoramento em Tempo Real - LoRa & Spring Boot
-                <span className="ml-2 text-xs text-slate-400">
-                  v{APP_VERSION} - {BUILD_TIME}
-                </span>
-              </p>
-            </div>
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
               <Sprout className="text-green-600" /> Smart Irrigation
             </h1>
-            <p className="text-slate-500">Monitoramento em Tempo Real - LoRa & Spring Boot</p>
+            <p className="text-slate-500">
+              Monitoramento em Tempo Real - LoRa & Spring Boot
+              <span className="ml-2 text-xs text-slate-400">
+                v{APP_VERSION} - {BUILD_TIME}
+              </span>
+            </p>
           </div>
           <div className="flex gap-2">
             <Badge
