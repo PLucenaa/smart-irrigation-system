@@ -88,22 +88,23 @@ jobs:
           ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
 
       - name: 🚀 Deploy no VPS
+        timeout-minutes: 10
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_BACKEND_DIR: ${{ secrets.VPS_BACKEND_DIR }}
           VPS_FRONTEND_DIR: ${{ secrets.VPS_FRONTEND_DIR }}
         run: |
-          # Configurações SSH otimizadas
+          # Configurações SSH otimizadas (mesmas do teste que funcionou)
           SSH_OPTS="-o StrictHostKeyChecking=no \
-                    -o ConnectTimeout=60 \
-                    -o ServerAliveInterval=30 \
+                    -o ConnectTimeout=30 \
+                    -o ServerAliveInterval=10 \
                     -o ServerAliveCountMax=3 \
                     -o TCPKeepAlive=yes"
 
           # Testar conexão primeiro
           echo "🔍 Testando conexão SSH..."
-          ssh $SSH_OPTS $VPS_USER@$VPS_HOST "echo '✅ Conexão OK' && hostname" || {
+          ssh $SSH_OPTS $VPS_USER@$VPS_HOST "echo '✅ Conexão OK'" || {
             echo "❌ Falha na conexão SSH"
             exit 1
           }
@@ -117,76 +118,56 @@ jobs:
           JAR_NAME=$(basename ./artifacts/api-jar/*.jar)
           scp $SSH_OPTS ./artifacts/api-jar/*.jar $VPS_USER@$VPS_HOST:$VPS_BACKEND_DIR/$JAR_NAME
 
-          # Faz backup do JAR anterior se existir
+          # Renomear JAR se necessário
           ssh $SSH_OPTS $VPS_USER@$VPS_HOST << ENDSSH
-            if [ -f "/root/$JAR_NAME" ]; then
-              if [ -f "/root/api-irrigacao-0.0.1-SNAPSHOT.jar" ] && [ "$JAR_NAME" != "api-irrigacao-0.0.1-SNAPSHOT.jar" ]; then
-                mv /root/api-irrigacao-0.0.1-SNAPSHOT.jar /root/api-irrigacao-0.0.1-SNAPSHOT.jar.backup.\$(date +%Y%m%d_%H%M%S)
+            if [ -f "$VPS_BACKEND_DIR/$JAR_NAME" ] && [ "$JAR_NAME" != "api-irrigacao-0.0.1-SNAPSHOT.jar" ]; then
+              if [ -f "$VPS_BACKEND_DIR/api-irrigacao-0.0.1-SNAPSHOT.jar" ]; then
+                mv $VPS_BACKEND_DIR/api-irrigacao-0.0.1-SNAPSHOT.jar $VPS_BACKEND_DIR/api-irrigacao-0.0.1-SNAPSHOT.jar.backup.\$(date +%Y%m%d_%H%M%S)
               fi
-              if [ "$JAR_NAME" != "api-irrigacao-0.0.1-SNAPSHOT.jar" ]; then
-                mv /root/$JAR_NAME /root/api-irrigacao-0.0.1-SNAPSHOT.jar
-              fi
+              mv $VPS_BACKEND_DIR/$JAR_NAME $VPS_BACKEND_DIR/api-irrigacao-0.0.1-SNAPSHOT.jar
             fi
           ENDSSH
 
-          # Copia o build do frontend temporariamente
+          # Copiar frontend
           echo "📦 Copiando frontend..."
           scp -r $SSH_OPTS \
             ./artifacts/dashboard-build/* \
             $VPS_USER@$VPS_HOST:/tmp/dashboard-build/
 
-          # Move frontend para diretório do Nginx e ajusta permissões
+          # Mover frontend para Nginx
           ssh $SSH_OPTS $VPS_USER@$VPS_HOST << ENDSSH
             sudo rm -rf $VPS_FRONTEND_DIR/*
             sudo mv /tmp/dashboard-build/* $VPS_FRONTEND_DIR/
             sudo chown -R www-data:www-data $VPS_FRONTEND_DIR
             sudo chmod -R 755 $VPS_FRONTEND_DIR
-            echo "✅ Frontend atualizado em $VPS_FRONTEND_DIR"
+            echo "✅ Frontend atualizado"
           ENDSSH
 
-          # Verifica e reinicia serviços
+          # Reiniciar serviços
           ssh $SSH_OPTS $VPS_USER@$VPS_HOST << 'ENDSSH'
-            # Verifica se o container Docker PostgreSQL está rodando
+            # Verificar Docker
             if docker ps --format '{{.Names}}' | grep -q "smart-irrigation"; then
-              echo "✅ Container PostgreSQL (smart-irrigation) está rodando"
-            else
-              echo "⚠️ Container PostgreSQL não está rodando. Verifique manualmente."
+              echo "✅ Container PostgreSQL rodando"
             fi
 
-            # Reinicia serviço Spring Boot (se existir como systemd)
+            # Reiniciar Spring Boot
             if systemctl list-unit-files 2>/dev/null | grep -q "api-irrigacao.service"; then
               if systemctl is-active --quiet api-irrigacao; then
-                echo "🔄 Reiniciando serviço api-irrigacao..."
+                echo "🔄 Reiniciando api-irrigacao..."
                 sudo systemctl restart api-irrigacao
-                sleep 3
-                if systemctl is-active --quiet api-irrigacao; then
-                  echo "✅ Serviço api-irrigacao reiniciado com sucesso"
-                else
-                  echo "❌ Erro ao reiniciar serviço api-irrigacao"
-                  sudo systemctl status api-irrigacao --no-pager -l | head -n 20 || true
-                fi
-              else
-                echo "▶️ Iniciando serviço api-irrigacao..."
-                sudo systemctl start api-irrigacao
                 sleep 2
+              else
+                sudo systemctl start api-irrigacao
               fi
-            else
-              echo "ℹ️ Serviço systemd não configurado. Reinicie manualmente:"
-              echo "   java -jar /root/api-irrigacao-0.0.1-SNAPSHOT.jar"
             fi
 
-            # Recarrega Nginx
-            if command -v nginx >/dev/null 2>&1; then
-              if sudo nginx -t 2>/dev/null; then
-                sudo systemctl reload nginx
-                echo "✅ Nginx recarregado"
-              else
-                echo "❌ Erro na configuração do Nginx"
-                sudo nginx -t
-                exit 1
-              fi
+            # Recarregar Nginx
+            if sudo nginx -t 2>/dev/null; then
+              sudo systemctl reload nginx
+              echo "✅ Nginx recarregado"
             else
-              echo "⚠️ Nginx não encontrado"
+              echo "❌ Erro no Nginx"
+              exit 1
             fi
           ENDSSH
 
@@ -195,5 +176,4 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           echo "✅ Deploy concluído!"
-          echo "🌐 Frontend: https://$VPS_HOST"
-          echo "🔌 API: https://$VPS_HOST/api/leituras"
+          echo "🌐 https://$VPS_HOST"

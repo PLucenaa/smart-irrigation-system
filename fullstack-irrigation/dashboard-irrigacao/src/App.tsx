@@ -5,9 +5,12 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Droplets, Thermometer, RefreshCw, Sprout } from 'lucide-react'
 import { Leitura } from './types/leitura'
 
+
 // Constantes de configuração
 const API_ENDPOINT = '/api/leituras'
 const POLLING_INTERVAL_MS = 10000 // 10 segundos
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || '1.0.0';
+const BUILD_TIME = new Date().toLocaleString('pt-BR');
 
 // Valores padrão para quando não há dados disponíveis
 const DADOS_PADRAO: Partial<Leitura> = {
@@ -84,6 +87,17 @@ export default function Dashboard() {
 
         {/* Cabeçalho */}
         <div className="flex justify-between items-center">
+          <div>
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+                <Sprout className="text-green-600" /> Smart Irrigation
+              </h1>
+              <p className="text-slate-500">
+                Monitoramento em Tempo Real - LoRa & Spring Boot
+                <span className="ml-2 text-xs text-slate-400">
+                  v{APP_VERSION} - {BUILD_TIME}
+                </span>
+              </p>
+            </div>
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
               <Sprout className="text-green-600" /> Smart Irrigation
