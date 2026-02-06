@@ -69,8 +69,8 @@ jobs:
           retention-days: 1
 
   deploy:
-    name: 🚀 Deploy no VPS (Debian)
-    needs: [build-backend, build-frontend]
+    name: 🚀 Deploy no VPS (via Webhook)
+    needs: [ build-backend, build-frontend ]
     runs-on: ubuntu-latest
 
     steps:
@@ -82,120 +82,23 @@ jobs:
         with:
           path: ./artifacts
 
-      - name: 🔐 Configurar SSH
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
-
-      - name: 🚀 Deploy no VPS
+      - name: 🚀 Notificar VPS para deploy
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_BACKEND_DIR: ${{ secrets.VPS_BACKEND_DIR }}
-          VPS_FRONTEND_DIR: ${{ secrets.VPS_FRONTEND_DIR }}
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
         run: |
-          # Configurações SSH otimizadas (usar em TODAS as conexões)
-          SSH_OPTS="-o StrictHostKeyChecking=no \
-                    -o ConnectTimeout=60 \
-                    -o ServerAliveInterval=30 \
-                    -o ServerAliveCountMax=3 \
-                    -o TCPKeepAlive=yes"
-
-          # Testar conexão primeiro
-          echo "🔍 Testando conexão SSH..."
-          ssh $SSH_OPTS $VPS_USER@$VPS_HOST "echo '✅ Conexão OK' && hostname" || {
-            echo "❌ Falha na conexão SSH"
-            exit 1
-          }
-
-          # Criar diretórios
-          echo "📁 Criando diretórios..."
-          ssh $SSH_OPTS $VPS_USER@$VPS_HOST "mkdir -p $VPS_BACKEND_DIR /tmp/dashboard-build"
-
-          # Copiar JAR
-          echo "📦 Copiando JAR..."
-          JAR_NAME=$(basename ./artifacts/api-jar/*.jar)
-          scp $SSH_OPTS ./artifacts/api-jar/*.jar $VPS_USER@$VPS_HOST:$VPS_BACKEND_DIR/$JAR_NAME
-          
-          # Faz backup do JAR anterior se existir
-          ssh $SSH_OPTS $VPS_USER@$VPS_HOST << ENDSSH
-            if [ -f "/root/$JAR_NAME" ]; then
-              # Se já existe um JAR com esse nome, faz backup
-              if [ -f "/root/api-irrigacao-0.0.1-SNAPSHOT.jar" ] && [ "$JAR_NAME" != "api-irrigacao-0.0.1-SNAPSHOT.jar" ]; then
-                mv /root/api-irrigacao-0.0.1-SNAPSHOT.jar /root/api-irrigacao-0.0.1-SNAPSHOT.jar.backup.\$(date +%Y%m%d_%H%M%S)
-              fi
-              # Se o novo JAR tem nome diferente, renomeia para o padrão esperado
-              if [ "$JAR_NAME" != "api-irrigacao-0.0.1-SNAPSHOT.jar" ]; then
-                mv /root/$JAR_NAME /root/api-irrigacao-0.0.1-SNAPSHOT.jar
-              fi
-            fi
-          ENDSSH
-
-          # Copia o build do frontend temporariamente
-          echo "📦 Copiando frontend..."
-          scp -r $SSH_OPTS \
-            ./artifacts/dashboard-build/* \
-            $VPS_USER@$VPS_HOST:/tmp/dashboard-build/
-
-          # Move frontend para diretório do Nginx e ajusta permissões
-          ssh $SSH_OPTS $VPS_USER@$VPS_HOST << ENDSSH
-            sudo rm -rf $VPS_FRONTEND_DIR/*
-            sudo mv /tmp/dashboard-build/* $VPS_FRONTEND_DIR/
-            sudo chown -R www-data:www-data $VPS_FRONTEND_DIR
-            sudo chmod -R 755 $VPS_FRONTEND_DIR
-            echo "✅ Frontend atualizado em $VPS_FRONTEND_DIR"
-          ENDSSH
-
-          # Verifica e reinicia serviços
-          ssh $SSH_OPTS $VPS_USER@$VPS_HOST << 'ENDSSH'
-            # Verifica se o container Docker PostgreSQL está rodando
-            if docker ps --format '{{.Names}}' | grep -q "smart-irrigation"; then
-              echo "✅ Container PostgreSQL (smart-irrigation) está rodando"
-            else
-              echo "⚠️ Container PostgreSQL não está rodando. Verifique manualmente."
-            fi
-
-            # Reinicia serviço Spring Boot (se existir como systemd)
-            if systemctl list-unit-files 2>/dev/null | grep -q "api-irrigacao.service"; then
-              if systemctl is-active --quiet api-irrigacao; then
-                echo "🔄 Reiniciando serviço api-irrigacao..."
-                sudo systemctl restart api-irrigacao
-                sleep 3
-                if systemctl is-active --quiet api-irrigacao; then
-                  echo "✅ Serviço api-irrigacao reiniciado com sucesso"
-                else
-                  echo "❌ Erro ao reiniciar serviço api-irrigacao"
-                  sudo systemctl status api-irrigacao --no-pager -l | head -n 20 || true
-                fi
-              else
-                echo "▶️ Iniciando serviço api-irrigacao..."
-                sudo systemctl start api-irrigacao
-                sleep 2
-              fi
-            else
-              echo "ℹ️ Serviço systemd não configurado. Reinicie manualmente:"
-              echo "   java -jar /root/api-irrigacao-0.0.1-SNAPSHOT.jar"
-            fi
-
-            # Recarrega Nginx
-            if command -v nginx >/dev/null 2>&1; then
-              if sudo nginx -t 2>/dev/null; then
-                sudo systemctl reload nginx
-                echo "✅ Nginx recarregado"
-              else
-                echo "❌ Erro na configuração do Nginx"
-                sudo nginx -t
-                exit 1
-              fi
-            else
-              echo "⚠️ Nginx não encontrado"
-            fi
-          ENDSSH
+          # Envia webhook para o VPS executar o deploy
+          curl -X POST "http://$VPS_HOST:8081/deploy" \
+            -H "Authorization: Bearer $DEPLOY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"action":"deploy"}' \
+            --max-time 30 \
+            || echo "⚠️ Webhook não disponível, deploy manual necessário"
 
       - name: ✅ Verificar deploy
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
-          echo "✅ Deploy concluído!"
+          echo "✅ Deploy iniciado via webhook!"
           echo "🌐 Frontend: https://$VPS_HOST"
           echo "🔌 API: https://$VPS_HOST/api/leituras"
