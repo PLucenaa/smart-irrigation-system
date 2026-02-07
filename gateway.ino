@@ -1,115 +1,119 @@
 /*
-   HELTEC V3 - RADIOLIB (A PROVA DE FALHAS)
+   HELTEC V3 - RECEPTOR (BRIDGE/GATEWAY)
+   Função: Recebe JSON via LoRa, decodifica e mostra na tela OLED
    Biblioteca necessária: RadioLib (instalar pelo gerenciador)
+   Biblioteca JSON: ArduinoJson (Instale a versão 6 ou 7 pelo gerenciador)
 */
 
 #include <RadioLib.h>
 #include <Wire.h>
 #include "HT_SSD1306Wire.h"
+#include <ArduinoJson.h> // <--- IMPORTANTE: Instale essa lib se não tiver
 
-// --- CONFIGURAÇÃO MANUAL DA TELA (Que já sabemos que funciona) ---
-// Vext: 36, RST: 21, SDA: 17, SCL: 18
+// --- TELA OLED ---
 SSD1306Wire oled(0x3c, 500000, 17, 18, GEOMETRY_128_64, 21); 
 
-// --- CONFIGURAÇÃO MANUAL DO RÁDIO (SX1262) ---
-// Pinos: NSS=8, DIO1=14, RST=12, BUSY=13
+// --- RÁDIO LORA ---
 SX1262 radio = new Module(8, 14, 12, 13);
 
-// Variável para receber dados
-String mensagemRecebida = "";
-bool recebeuAlgo = false;
+// Variáveis de controle
+volatile bool recebeuAlgo = false;
 
-// Função chamada quando chega pacote (Interrupção)
+// Interrupção
 void setFlag(void) {
   recebeuAlgo = true;
 }
 
-void mostraNaTela(String l1, String l2) {
+// Função auxiliar de display
+void atualizarTela(String status, int umidade, int id) {
     oled.clear();
-    oled.drawString(0, 0,  l1);
-    oled.drawString(0, 25, l2);
+    
+    // Cabeçalho
+    oled.setFont(ArialMT_Plain_10);
+    oled.drawString(0, 0, "SENSOR ID: " + String(id));
+    oled.drawString(60, 0, "RSSI: " + String(radio.getRSSI(), 0));
+
+    // Valor Principal Gigante
+    oled.setFont(ArialMT_Plain_24);
+    oled.drawString(35, 18, String(umidade) + "%");
+
+    // Barra de Progresso visual (só pra ficar "Pro")
+    oled.drawRect(10, 50, 108, 10); // Contorno
+    int larguraBarra = map(umidade, 0, 100, 0, 104);
+    oled.fillRect(12, 52, larguraBarra, 6); // Preenchimento
+
     oled.display();
 }
 
 void setup() {
   Serial.begin(115200);
 
-  // 1. LIGAR ENERGIA DA PLACA (Vext)
-  pinMode(36, OUTPUT); // Vext
-  digitalWrite(36, LOW); // LIGA (LOW = ON)
+  // Vext ON
+  pinMode(36, OUTPUT);
+  digitalWrite(36, LOW); 
   delay(500); 
 
-  // 2. INICIAR TELA
+  // Tela Init
   oled.init();
   oled.flipScreenVertically();
   oled.setFont(ArialMT_Plain_16);
-  mostraNaTela("SISTEMA", "INICIANDO...");
-  delay(1000);
+  oled.drawString(0, 0, "AGUARDANDO...");
+  oled.display();
 
-  // 3. INICIAR RÁDIO VIA RADIOLIB
-  mostraNaTela("RADIO", "CONFIGURANDO");
-  Serial.print("[SX1262] Inicializando ... ");
-  
-  // Inicia com frequência 915.0 MHz
+  // Radio Init
+  Serial.print("[RX] Inicializando ... ");
   int state = radio.begin(915.0);
   
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("SUCESSO!");
-    mostraNaTela("RADIO", "OK - 915MHz");
   } else {
-    Serial.print("FALHA, codigo ");
+    Serial.print("FALHA, cod ");
     Serial.println(state);
-    mostraNaTela("ERRO RADIO", "COD: " + String(state));
-    while (true); // Trava aqui se der erro
+    while (true);
   }
 
-  // Configurações extras (Opcional, mas bom para alcance)
+  // Mesmas configs do Transmissor
   radio.setBandwidth(125.0);
   radio.setSpreadingFactor(7);
   radio.setCodingRate(5);
-  radio.setOutputPower(2); // Potência BAIXA (2dBm) para economizar energia
-
-  // Configura a interrupção (callback)
-  radio.setDio1Action(setFlag);
-
-  // Começa a escutar (RX)
-  state = radio.startReceive();
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println("[SX1262] Escutando...");
-  } else {
-    Serial.print("[SX1262] Falha ao escutar, codigo ");
-    Serial.println(state);
-  }
   
-  delay(1000);
-  mostraNaTela("AGUARDANDO", "DADOS...");
+  radio.setDio1Action(setFlag);
+  radio.startReceive();
 }
 
 void loop() {
-  // Verifica se a flag de interrupção foi ativada
   if(recebeuAlgo) {
-    recebeuAlgo = false; // Reseta flag
+    recebeuAlgo = false;
 
-    // Tenta ler o dado
     String str;
     int state = radio.readData(str);
 
     if (state == RADIOLIB_ERR_NONE) {
-      // SUCESSO!
-      Serial.println(str);
-      mostraNaTela("RECEBIDO:", str);
-      
-      // Pisca LED
-      digitalWrite(LED_BUILTIN, HIGH);
-      delay(50);
-      digitalWrite(LED_BUILTIN, LOW);
+      Serial.println("RX: " + str); // Ex: {"id":1,"umid":45}
+
+      // --- DECODIFICAÇÃO JSON ---
+      JsonDocument doc; // Para ArduinoJson v7 (use StaticJsonDocument<200> doc; se for v6)
+      DeserializationError error = deserializeJson(doc, str);
+
+      if (!error) {
+        int id = doc["id"];
+        int umid = doc["umid"];
+
+        // Lógica de Alerta (Exemplo Indústria 4.0)
+        if (umid < 20) {
+           Serial.println("ALERTA: SOLO MUITO SECO!");
+           // Aqui você poderia ligar um relé no pino X
+        }
+
+        atualizarTela("RX OK", umid, id);
+      } else {
+        Serial.println("Erro ao ler JSON");
+      }
 
     } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
-      Serial.println("[SX1262] Erro de CRC (Dado corrompido)");
-      mostraNaTela("ERRO", "CRC FAIL");
+      Serial.println("Erro CRC");
     }
 
-    // Volta a escutar
     radio.startReceive();
   }
 }
