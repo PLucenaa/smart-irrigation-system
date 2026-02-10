@@ -1,5 +1,6 @@
 package com.tcc.api_irrigacao.controller;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -24,8 +25,9 @@ public class ClimaController {
     @Value("${HG_API_KEY:}")
     private String hgApiKey;
 
-    public ClimaController() {
-        this.restTemplate = new RestTemplate();
+    @Autowired
+    public ClimaController(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
     }
 
     /**

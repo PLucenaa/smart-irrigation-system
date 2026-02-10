@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card"
 import { Badge } from "./components/ui/badge"
-import { Button } from "./components/ui/button"
 import { Gauge } from "./components/ui/Gauge"
 import { ClimaCard } from "./components/ClimaCard"
+import { Button } from "./components/ui/button"
 import { RecomendacaoInteligenteCard } from "./components/RecomendacaoInteligenteCard"
 import {
   LineChart,
@@ -23,17 +23,13 @@ import {
   WifiOff,
   AlertTriangle,
   CheckCircle2,
-  Clock,
-  Zap,
-  RefreshCw
+  Clock
 } from 'lucide-react'
 import { Leitura } from './types/leitura'
 
 // Constantes de configuração
 const API_ENDPOINT = '/api/leituras'
 const POLLING_INTERVAL_MS = 10000
-const APP_VERSION = import.meta.env.VITE_APP_VERSION || '1.0.0'
-const BUILD_TIME = new Date().toLocaleString('pt-BR')
 
 // Limites para cores e alertas
 const UMIDADE_CRITICA = 40
@@ -48,7 +44,6 @@ const DADOS_PADRAO: Partial<Leitura> = {
 
 export default function Dashboard() {
   const [dados, setDados] = useState<Leitura[]>([]);
-  const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [irrigando, setIrrigando] = useState(false);
 
@@ -74,7 +69,6 @@ export default function Dashboard() {
       console.error('Erro ao buscar dados:', error);
       setErro(mensagemErro);
     } finally {
-      setLoading(false);
     }
   };
 
@@ -148,39 +142,7 @@ export default function Dashboard() {
   // Dentro do componente Dashboard, adicionar estado:
   const [probabilidadeChuva, setProbabilidadeChuva] = useState<number>(0)
 
-  const obterRecomendacao = (): { texto: string; tipo: 'info' | 'warning' | 'critical' } => {
-    const umidade = ultimaLeitura.umidade || 0
-    const status = ultimaLeitura.status || 'NORMAL'
-    const online = estaOnline()
-
-    if (!online) {
-      return {
-        texto: '🔴 Sensor Offline: O dispositivo não está enviando dados. Verifique a conexão e a alimentação do sensor.',
-        tipo: 'critical'
-      }
-    }
-
-    if (status === 'CRITICO' || umidade < UMIDADE_CRITICA) {
-      return {
-        texto: '⚠️ Irrigação Imediata Necessária! O solo está muito seco. Risco de dano às plantas.',
-        tipo: 'critical'
-      }
-    }
-
-    if (status === 'ATENCAO' || umidade < UMIDADE_ATENCAO) {
-      return {
-        texto: '💡 Planejar Irrigação: O solo está secando. Recomenda-se irrigar nas próximas 2 horas.',
-        tipo: 'warning'
-      }
-    }
-
-    return {
-      texto: '✅ Condições Ideais: Solo com umidade adequada. Sistema funcionando normalmente.',
-      tipo: 'info'
-    }
-  }
-
-  /**
+   /**
    * Handler para ativação manual de irrigação
    */
   const handleIrrigacaoManual = async (): Promise<void> => {
@@ -211,7 +173,6 @@ export default function Dashboard() {
     }
   };
 
-  const recomendacao = obterRecomendacao();
   const tempoLeitura = calcularTempoDesdeLeitura();
   const online = estaOnline();
 
@@ -227,26 +188,15 @@ export default function Dashboard() {
               </h1>
               <p className="text-slate-500 mt-1">
                 Monitoramento em Tempo Real - LoRa & Spring Boot
-                <span className="ml-2 text-xs text-slate-400">
-                v{APP_VERSION} - {BUILD_TIME}
-              </span>
               </p>
             </div>
-            <div className="flex flex-wrap gap-2 items-center">
-              <Badge
-                  variant="outline"
-                  className={loading ? "bg-yellow-100 text-yellow-700" : "bg-green-100 text-green-700"}
-              >
-                {loading ? "Carregando..." : "Conectado API"}
-              </Badge>
-              {/* Heartbeat Indicator - Bolinha no canto */}
+            <div className="flex items-center gap-3">
+              {/* Heartbeat Indicator */}
               <div className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full ${
-                    online ? "bg-green-500 animate-pulse" : "bg-red-500"
-                }`} title={online ? "Sensor Online" : "Sensor Offline"} />
+                <div className={`w-3 h-3 rounded-full ${online ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
                 <Badge
                     variant="outline"
-                    className={online ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}
+                    className={online ? 'bg-green-50 text-green-700 border-green-300' : 'bg-red-50 text-red-700 border-red-300'}
                 >
                   {online ? (
                       <>
@@ -259,6 +209,14 @@ export default function Dashboard() {
                   )}
                 </Badge>
               </div>
+              {/* Botão de Irrigação Manual */}
+              <Button
+                  onClick={handleIrrigacaoManual}
+                  disabled={irrigando || !online}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                {irrigando ? 'Ativando...' : 'FORÇAR IRRIGAÇÃO'}
+              </Button>
               {erro && (
                   <Badge variant="outline" className="bg-red-100 text-red-700">
                     Erro: {erro}
@@ -399,11 +357,11 @@ export default function Dashboard() {
                         const date = new Date(t);
                         return `Hora: ${date.toLocaleString('pt-BR')}`;
                       }}
-                      formatter={(value: unknown, name: string) => {
+                      formatter={(value: unknown, name?: string) => {
                         if (name === 'umidade' || String(value).includes('%')) {
                           return [`${value}%`, 'Umidade'];
                         }
-                        return [String(value), name];
+                        return [String(value), name || 'Valor'];
                       }}
                   />
                   <ReferenceLine
