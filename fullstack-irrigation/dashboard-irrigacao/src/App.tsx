@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card"
 import { Badge } from "./components/ui/badge"
 import { Button } from "./components/ui/button"
 import { Gauge } from "./components/ui/Gauge"
+import { ClimaCard } from "./components/ClimaCard"
+import { RecomendacaoInteligenteCard } from "./components/RecomendacaoInteligenteCard"
 import {
   LineChart,
   Line,
@@ -143,48 +145,40 @@ export default function Dashboard() {
     return diffMinutos < 2; // Online se < 2 minutos
   };
 
-  /**
-   * Gera recomendação baseada nos dados
-   */
-  const obterRecomendacao = (): { texto: string; tipo: 'info' | 'warning' | 'critical' } => {
-    const umidade = ultimaLeitura.umidade || 0;
-    const status = ultimaLeitura.status || 'NORMAL';
-    const online = estaOnline();
+  // Dentro do componente Dashboard, adicionar estado:
+  const [probabilidadeChuva, setProbabilidadeChuva] = useState<number>(0)
 
-    // Se o sensor está offline, priorizar esse alerta
+  const obterRecomendacao = (): { texto: string; tipo: 'info' | 'warning' | 'critical' } => {
+    const umidade = ultimaLeitura.umidade || 0
+    const status = ultimaLeitura.status || 'NORMAL'
+    const online = estaOnline()
+
     if (!online) {
       return {
         texto: '🔴 Sensor Offline: O dispositivo não está enviando dados. Verifique a conexão e a alimentação do sensor.',
         tipo: 'critical'
-      };
+      }
     }
 
     if (status === 'CRITICO' || umidade < UMIDADE_CRITICA) {
       return {
         texto: '⚠️ Irrigação Imediata Necessária! O solo está muito seco. Risco de dano às plantas.',
         tipo: 'critical'
-      };
+      }
     }
 
-    if (status === 'ATENCAO' || umidade < UMIDADE_CRITICA) {
+    if (status === 'ATENCAO' || umidade < UMIDADE_ATENCAO) {
       return {
         texto: '💡 Planejar Irrigação: O solo está secando. Recomenda-se irrigar nas próximas 2 horas.',
         tipo: 'warning'
-      };
-    }
-
-    if (umidade < UMIDADE_ATENCAO) {
-      return {
-        texto: '📊 Monitorando: Umidade dentro da faixa aceitável. Continue monitorando.',
-        tipo: 'info'
-      };
+      }
     }
 
     return {
       texto: '✅ Condições Ideais: Solo com umidade adequada. Sistema funcionando normalmente.',
       tipo: 'info'
-    };
-  };
+    }
+  }
 
   /**
    * Handler para ativação manual de irrigação
@@ -349,46 +343,19 @@ export default function Dashboard() {
             </Card>
           </div>
 
-          {/* Recomendação do Sistema - Nível 4 */}
-          <Card className={`${
-              recomendacao.tipo === 'critical' ? 'bg-red-50 border-red-200' :
-                  recomendacao.tipo === 'warning' ? 'bg-yellow-50 border-yellow-200' :
-                      'bg-blue-50 border-blue-200'
-          } border-2`}>
-            <CardContent className="pt-6">
-              <div className="flex items-start gap-3">
-                <div className={`text-2xl ${
-                    recomendacao.tipo === 'critical' ? 'text-red-600' :
-                        recomendacao.tipo === 'warning' ? 'text-yellow-600' :
-                            'text-blue-600'
-                }`}>
-                  {recomendacao.tipo === 'critical' ? '⚠️' : recomendacao.tipo === 'warning' ? '💡' : '📊'}
-                </div>
-                <div className="flex-1">
-                  <h3 className="font-semibold text-slate-900 mb-1">Recomendação do Sistema</h3>
-                  <p className="text-sm text-slate-700">{recomendacao.texto}</p>
-                </div>
-                <Button
-                    onClick={handleIrrigacaoManual}
-                    disabled={irrigando}
-                    className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50"
-                    size="sm"
-                >
-                  {irrigando ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                        Ativando...
-                      </>
-                  ) : (
-                      <>
-                        <Zap className="w-4 h-4 mr-2" />
-                        FORÇAR IRRIGAÇÃO
-                      </>
-                  )}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          {/* Cards de Clima e Recomendação - Nível 1.5 (2 cards lado a lado) */}
+          <div className="grid gap-4 md:grid-cols-2">
+            <ClimaCard
+                latitude={2.9087}
+                longitude={-61.3039}
+                onProbabilidadeChuvaChange={setProbabilidadeChuva}
+            />
+            <RecomendacaoInteligenteCard
+                umidade={ultimaLeitura.umidade || 0}
+                probabilidadeChuva={probabilidadeChuva}
+                sensorOnline={online}
+            />
+          </div>
 
           {/* Gráfico Inteligente - Nível 2 */}
           <Card className="shadow-lg">
