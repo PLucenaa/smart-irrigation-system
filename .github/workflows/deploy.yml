@@ -111,7 +111,7 @@ jobs:
 
           # Criar diretórios
           echo "📁 Criando diretórios..."
-          ssh $SSH_OPTS $VPS_USER@$VPS_HOST "mkdir -p $VPS_BACKEND_DIR /tmp/dashboard-build"
+          ssh $SSH_OPTS $VPS_USER@$VPS_HOST "mkdir -p $VPS_BACKEND_DIR /tmp/dashboard-build && rm -rf /tmp/dashboard-build/*"
 
           # Copiar JAR
           echo "📦 Copiando JAR..."
@@ -128,10 +128,14 @@ jobs:
             fi
           ENDSSH
 
-          # Copiar frontend
+          # Copiar frontend (usando método mais robusto)
           echo "📦 Copiando frontend..."
+          # Primeiro, garantir que o diretório existe e está vazio
+          ssh $SSH_OPTS $VPS_USER@$VPS_HOST "rm -rf /tmp/dashboard-build && mkdir -p /tmp/dashboard-build"
+          
+          # Copiar todos os arquivos e diretórios
           scp -r $SSH_OPTS \
-            ./artifacts/dashboard-build/* \
+            ./artifacts/dashboard-build/. \
             $VPS_USER@$VPS_HOST:/tmp/dashboard-build/
 
           # Mover frontend para Nginx
