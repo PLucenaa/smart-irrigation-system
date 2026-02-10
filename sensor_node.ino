@@ -1,86 +1,95 @@
 /*
-   SENSOR NODE - RADIOLIB (Transmissor Compatível)
-   Envia JSON simulado para testar o Bridge.
-   Usa Deep Sleep para economizar bateria.
+   SENSOR NODE - RADIOLIB (COM LEITURA REAL)
+   Hardware: Heltec V3 + Sensor Capacitivo v1.2
 */
 
 #include <RadioLib.h>
 #include <Wire.h>
-#include <esp_sleep.h>
 
-// --- Pinos Heltec V3 ---
+// --- CONFIGURAÇÃO DO SENSOR ---
+#define PIN_SENSOR 1 // Pino ADC onde ligou o sensor
+
+// *** SUBSTITUA PELOS VALORES QUE VOCÊ ANOTOU NA CALIBRAÇÃO ***
+const int VALOR_SECO = 2360;
+const int VALOR_MOLHADO = 1110;
+
+// --- Pinos Heltec V3 (Radio) ---
 SX1262 radio = new Module(8, 14, 12, 13);
-
-// Constantes de configuração
-const int INTERVALO_ENVIO_SEGUNDOS = 30; // Envia a cada 30 segundos
-const int INTERVALO_ENVIO_MICROSEGUNDOS = INTERVALO_ENVIO_SEGUNDOS * 1000000;
 
 int contador = 0;
 
 void setup() {
   Serial.begin(115200);
-  delay(1000); // Aguarda Serial estabilizar
 
-  // Liga Vext (Energia do Rádio)
+  // Liga Vext (Energia dos periféricos da placa)
   pinMode(36, OUTPUT);
-  digitalWrite(36, LOW);
+  digitalWrite(36, LOW); 
   delay(500);
+
+  // Configura a resolução do ADC para 12 bits (0-4095)
+  analogReadResolution(12);
 
   Serial.print("[Sensor] Iniciando Radio... ");
 
-  // MESMAS CONFIGURAÇÕES DO BRIDGE
   int state = radio.begin(915.0);
-
+  
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("SUCESSO!");
   } else {
     Serial.print("FALHA, codigo ");
     Serial.println(state);
-    // Em caso de falha, tenta deep sleep mesmo assim
-    esp_deep_sleep_start();
-    return;
+    while (true);
   }
 
-  // Ajuste fino para bater com o Bridge
+  // Ajustes de LoRa para melhor alcance
   radio.setBandwidth(125.0);
   radio.setSpreadingFactor(7);
   radio.setCodingRate(5);
-  radio.setOutputPower(10); // Potência média para o sensor
+  radio.setOutputPower(10);
+}
 
-  // Envia uma leitura antes de dormir
-  enviarLeitura();
+int lerUmidade() {
+  int leituraRaw = analogRead(PIN_SENSOR);
 
-  // Configura o timer de wake-up para deep sleep
-  esp_sleep_enable_timer_wakeup(INTERVALO_ENVIO_MICROSEGUNDOS);
+  // Imprime para debug
+  Serial.print("RAW: ");
+  Serial.print(leituraRaw);
 
-  Serial.println("[Sensor] Entrando em Deep Sleep por " + String(INTERVALO_ENVIO_SEGUNDOS) + " segundos...");
-  delay(100); // Pequeno delay antes de entrar em sleep
+  // A função map converte o range de entrada para 0-100%
+  // Note que invertemos: Valor Seco -> 0%, Valor Molhado -> 100%
+  int porcentagem = map(leituraRaw, VALOR_SECO, VALOR_MOLHADO, 0, 100);
 
-  // Entra em deep sleep
-  esp_deep_sleep_start();
+  // Trava os valores entre 0 e 100 para não dar números negativos ou >100
+  if(porcentagem < 0) porcentagem = 0;
+  if(porcentagem > 100) porcentagem = 100;
+
+  Serial.print(" | Umidade: ");
+  Serial.println(porcentagem);
+
+  return porcentagem;
 }
 
 void loop() {
-  // Este código nunca será executado porque o ESP32
-  // reinicia após o deep sleep, voltando para setup()
-}
+  Serial.print("[Sensor] Lendo e Enviando... ");
 
-void enviarLeitura() {
-  Serial.print("[Sensor] Enviando pacote... ");
+  // Lê o sensor real
+  int umidadeReal = lerUmidade();
 
-  // Cria uma mensagem JSON falsa para testar a tela do Bridge
-  // Formato: {"id": 1, "umid": 45}
-  String mensagem = "{\"id\":1,\"umid\":" + String(random(20, 90)) + "}";
+  // Cria o JSON com o valor real
+  String mensagem = "{\"id\":1,\"umid\":" + String(umidadeReal) + "}";
 
-  // Envia
+  // Envia via LoRa
   int state = radio.transmit(mensagem);
 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("ENVIADO: " + mensagem);
-    contador++;
-    Serial.println("[Sensor] Total de envios: " + String(contador));
   } else {
     Serial.print("FALHA NO ENVIO, cod: ");
     Serial.println(state);
   }
+
+  contador++;
+  
+  // Dorme por 5 segundos (simulando economia de bateria)
+  delay(5000);
 }
