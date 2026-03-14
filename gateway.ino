@@ -1,46 +1,44 @@
 /*
-   HELTEC V3 - RECEPTOR (BRIDGE/GATEWAY)
-   Função: Recebe JSON via LoRa, decodifica e mostra na tela OLED
-   Biblioteca necessária: RadioLib (instalar pelo gerenciador)
-   Biblioteca JSON: ArduinoJson (Instale a versão 6 ou 7 pelo gerenciador)
+   HELTEC V3 - RECEPTOR (COM FILTRO DE AUTENTICAÇÃO E MÉTRICAS LORA)
 */
 
+#include <Arduino.h>
 #include <RadioLib.h>
 #include <Wire.h>
-#include "HT_SSD1306Wire.h"
-#include <ArduinoJson.h> // <--- IMPORTANTE: Instale essa lib se não tiver
+#include <SSD1306Wire.h>
+#include <ArduinoJson.h>
 
 // --- TELA OLED ---
-SSD1306Wire oled(0x3c, 500000, 17, 18, GEOMETRY_128_64, 21); 
+SSD1306Wire oled(0x3c, 17, 18);
 
 // --- RÁDIO LORA ---
 SX1262 radio = new Module(8, 14, 12, 13);
 
-// Variáveis de controle
+// --- SEGURANÇA ---
+const String TOKEN_ESPERADO = "AgroTCC@2026";
+
 volatile bool recebeuAlgo = false;
+void setFlag(void) { recebeuAlgo = true; }
 
-// Interrupção
-void setFlag(void) {
-  recebeuAlgo = true;
-}
-
-// Função auxiliar de display
-void atualizarTela(String status, int umidade, int id) {
+// --- ATUALIZADO: Agora recebe RSSI e SNR para mostrar na tela ---
+void atualizarTela(String status, int umidade, int id, float rssi, float snr) {
     oled.clear();
-    
-    // Cabeçalho
     oled.setFont(ArialMT_Plain_10);
-    oled.drawString(0, 0, "SENSOR ID: " + String(id));
-    oled.drawString(60, 0, "RSSI: " + String(radio.getRSSI(), 0));
 
-    // Valor Principal Gigante
+    // Linha 1: Status e ID
+    oled.drawString(0, 0, "ID: " + String(id) + " | " + status);
+
+    // Linha 2: Métricas de Rádio (Para o seu Teste do TCC!)
+    oled.drawString(0, 12, "Sinal: " + String(rssi, 0) + "dBm | SNR: " + String(snr, 1));
+
+    // Linha 3: Umidade Gigante
     oled.setFont(ArialMT_Plain_24);
-    oled.drawString(35, 18, String(umidade) + "%");
+    oled.drawString(35, 25, String(umidade) + "%");
 
-    // Barra de Progresso visual (só pra ficar "Pro")
-    oled.drawRect(10, 50, 108, 10); // Contorno
+    // Barra de Progresso
+    oled.drawRect(10, 54, 108, 10);
     int larguraBarra = map(umidade, 0, 100, 0, 104);
-    oled.fillRect(12, 52, larguraBarra, 6); // Preenchimento
+    oled.fillRect(12, 56, larguraBarra, 6);
 
     oled.display();
 }
@@ -48,35 +46,30 @@ void atualizarTela(String status, int umidade, int id) {
 void setup() {
   Serial.begin(115200);
 
-  // Vext ON
+  // 1. PRIMEIRO: Liga a energia física dos periféricos (Vext)
   pinMode(36, OUTPUT);
-  digitalWrite(36, LOW); 
-  delay(500); 
+  digitalWrite(36, LOW);
+  delay(500); // Espera a energia estabilizar
 
-  // Tela Init
+  // 2. SEGUNDO: Dá o reset na tela OLED agora que ela tem energia
+  pinMode(21, OUTPUT);
+  digitalWrite(21, LOW);
+  delay(50);
+  digitalWrite(21, HIGH);
+
+  // 3. TERCEIRO: Inicializa a tela
   oled.init();
   oled.flipScreenVertically();
   oled.setFont(ArialMT_Plain_16);
   oled.drawString(0, 0, "AGUARDANDO...");
   oled.display();
 
-  // Radio Init
-  Serial.print("[RX] Inicializando ... ");
   int state = radio.begin(915.0);
-  
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println("SUCESSO!");
-  } else {
-    Serial.print("FALHA, cod ");
-    Serial.println(state);
-    while (true);
-  }
-
-  // Mesmas configs do Transmissor
   radio.setBandwidth(125.0);
   radio.setSpreadingFactor(7);
   radio.setCodingRate(5);
-  
+  radio.setOutputPower(22);
+
   radio.setDio1Action(setFlag);
   radio.startReceive();
 }
@@ -84,36 +77,50 @@ void setup() {
 void loop() {
   if(recebeuAlgo) {
     recebeuAlgo = false;
-
     String str;
     int state = radio.readData(str);
 
     if (state == RADIOLIB_ERR_NONE) {
-      Serial.println("RX: " + str); // Ex: {"id":1,"umid":45}
 
-      // --- DECODIFICAÇÃO JSON ---
-      JsonDocument doc; // Para ArduinoJson v7 (use StaticJsonDocument<200> doc; se for v6)
+      // --- CAPTURA AS MÉTRICAS DO CHIP SX1262 ---
+      float rssi = radio.getRSSI();
+      float snr = radio.getSNR();
+
+      // Imprime no Serial para você copiar para o TCC
+      Serial.print("[METRICAS] RSSI: ");
+      Serial.print(rssi);
+      Serial.print(" dBm | SNR: ");
+      Serial.print(snr);
+      Serial.println(" dB");
+
+      JsonDocument doc;
       DeserializationError error = deserializeJson(doc, str);
 
       if (!error) {
+        // --- VALIDAÇÃO DE SEGURANÇA (AUTENTICAÇÃO) ---
+        String tokenRecebido = doc["token"] | "";
+
+        if (tokenRecebido != TOKEN_ESPERADO) {
+          Serial.println("[SEGURANCA] Pacote REJEITADO! Token Invalido: " + str);
+          // Passa 0 de umidade e as métricas capturadas
+          atualizarTela("INVÁLIDO", 0, 0, rssi, snr);
+          radio.startReceive();
+          return; // Aborta o processamento aqui
+        }
+
+        // Se passou da segurança, imprime no USB para o Python ler
+        Serial.println("RX: " + str);
+
         int id = doc["id"];
         int umid = doc["umid"];
 
-        // Lógica de Alerta (Exemplo Indústria 4.0)
-        if (umid < 20) {
-           Serial.println("ALERTA: SOLO MUITO SECO!");
-           // Aqui você poderia ligar um relé no pino X
-        }
+        // Atualiza a tela com as métricas novas
+        atualizarTela("RX OK", umid, id, rssi, snr);
 
-        atualizarTela("RX OK", umid, id);
       } else {
         Serial.println("Erro ao ler JSON");
       }
-
-    } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
-      Serial.println("Erro CRC");
     }
-
     radio.startReceive();
   }
 }
